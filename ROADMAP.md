@@ -9,7 +9,7 @@ the backlog. hourly commits work through this list.
 ## next up
 
 ### watch types
-- [ ] `process` watch -- check if a named process is running (by name or pid file)
+- [x] `process` watch -- check if a named process is running (by name or pid file)
 - [ ] `port` watch -- tcp connect check to host:port
 - [ ] `ssl_cert` watch -- days until ssl certificate expires
 - [ ] `json_api` watch -- poll a json api, evaluate a specific field with a condition (e.g. `status != "ok"`)

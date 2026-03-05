@@ -1,166 +1,206 @@
-# watch type reference
+# watch types reference
 
-full config schema for each watchdog watch type.
+full config schema for each supported watch type.
 
 ---
 
 ## http
 
-polls an http(s) endpoint. checks status code, response time, and optionally body content.
+poll an http endpoint and check status, response time, or body content.
 
 ```json
 {
-  "id":             "my-api",
-  "name":           "production api",
-  "type":           "http",
-  "url":            "https://api.example.com/health",
-  "expect_status":  200,
-  "timeout_s":      10,
-  "body_contains":  "ok",
-  "enabled":        true
+  "id": "my-api-health",
+  "type": "http",
+  "name": "my api health",
+  "url": "https://api.example.com/health",
+  "expect_status": 200,
+  "body_contains": "ok",
+  "timeout_s": 10,
+  "enabled": true
 }
 ```
 
-| field | required | default | description |
-|-------|----------|---------|-------------|
-| url | yes | -- | full url including scheme |
-| expect_status | no | 200 | expected http status code |
-| timeout_s | no | 10 | request timeout in seconds |
-| body_contains | no | -- | string that must appear in the response body |
+fields:
+- `url` (required) -- full url to GET
+- `expect_status` (default 200) -- expected http status code
+- `body_contains` -- string that must appear in the response body
+- `timeout_s` (default 10) -- request timeout in seconds
 
 ---
 
 ## rss
 
-polls an rss or atom feed. detects new entries and optionally keyword matches.
+poll an rss or atom feed. detect new entries or keyword matches.
 
 ```json
 {
-  "id":       "hn-feed",
-  "name":     "hacker news",
-  "type":     "rss",
-  "url":      "https://news.ycombinator.com/rss",
-  "keyword":  "openclaw",
-  "enabled":  true
+  "id": "hn-top",
+  "type": "rss",
+  "name": "hacker news top",
+  "url": "https://news.ycombinator.com/rss",
+  "keyword": "openai",
+  "enabled": true
 }
 ```
 
-| field | required | default | description |
-|-------|----------|---------|-------------|
-| url | yes | -- | feed url |
-| keyword | no | -- | keyword to match in entry titles. if set, alerts only on keyword hits |
-| timeout_s | no | 10 | fetch timeout |
+fields:
+- `url` (required) -- feed url
+- `keyword` -- if set, flag entries whose title or description contains this string (case-insensitive)
 
 ---
 
 ## system_disk
 
-checks disk usage for a path. alerts when usage exceeds the threshold.
+check disk usage for a mount point.
 
 ```json
 {
-  "id":                   "disk-home",
-  "name":                 "home partition",
-  "type":                 "system_disk",
-  "path":                 "/home",
-  "alert_threshold_pct":  85,
-  "enabled":              true
+  "id": "root-disk",
+  "type": "system_disk",
+  "name": "root disk usage",
+  "path": "/",
+  "warn_percent": 80,
+  "critical_percent": 90,
+  "enabled": true
 }
 ```
 
-| field | required | default | description |
-|-------|----------|---------|-------------|
-| path | no | / | path to check usage for |
-| alert_threshold_pct | no | 90 | alert when usage is above this percent |
+fields:
+- `path` (default `/`) -- mount point to check
+- `warn_percent` (default 80) -- warning threshold
+- `critical_percent` (default 90) -- critical threshold; result is `ok: false` above this
 
 ---
 
 ## system_cpu
 
-checks current cpu utilization. uses psutil if available, falls back to /proc/stat.
+check current cpu utilization.
 
 ```json
 {
-  "id":                   "cpu-server",
-  "name":                 "cpu load",
-  "type":                 "system_cpu",
-  "alert_threshold_pct":  85,
-  "enabled":              true
+  "id": "cpu-check",
+  "type": "system_cpu",
+  "name": "cpu usage",
+  "warn_percent": 80,
+  "critical_percent": 95,
+  "enabled": true
 }
 ```
 
-| field | required | default | description |
-|-------|----------|---------|-------------|
-| alert_threshold_pct | no | 90 | alert when cpu is above this percent |
+fields:
+- `warn_percent` (default 80) -- warning threshold
+- `critical_percent` (default 95) -- critical threshold; result is `ok: false` above this
 
 ---
 
 ## system_memory
 
-checks memory utilization. uses psutil if available, falls back to /proc/meminfo.
+check current memory utilization.
 
 ```json
 {
-  "id":                   "mem-server",
-  "name":                 "memory usage",
-  "type":                 "system_memory",
-  "alert_threshold_pct":  90,
-  "enabled":              true
+  "id": "mem-check",
+  "type": "system_memory",
+  "name": "memory usage",
+  "warn_percent": 80,
+  "critical_percent": 95,
+  "enabled": true
 }
 ```
 
-| field | required | default | description |
-|-------|----------|---------|-------------|
-| alert_threshold_pct | no | 90 | alert when memory is above this percent |
+fields:
+- `warn_percent` (default 80) -- warning threshold
+- `critical_percent` (default 95) -- critical threshold; result is `ok: false` above this
 
 ---
 
 ## file
 
-checks a file's existence, size, modification time, or content.
+check a file for existence, age, size, or content.
 
 ```json
 {
-  "id":           "lock-file",
-  "name":         "process lock file",
-  "type":         "file",
-  "path":         "/var/run/myapp.pid",
-  "expect_exists": true,
-  "max_age_s":    3600,
-  "contains":     "running",
-  "enabled":      true
+  "id": "app-log-fresh",
+  "type": "file",
+  "name": "app log freshness",
+  "path": "/var/log/myapp/app.log",
+  "max_age_seconds": 3600,
+  "grep": "ERROR",
+  "enabled": true
 }
 ```
 
-| field | required | default | description |
-|-------|----------|---------|-------------|
-| path | yes | -- | absolute path to the file |
-| expect_exists | no | true | alert if exists != this value |
-| max_age_s | no | -- | alert if file has not been modified in this many seconds |
-| contains | no | -- | string that must be present in the file contents |
+fields:
+- `path` (required) -- absolute or relative path to the file
+- `max_age_seconds` -- alert if file has not been modified within this many seconds
+- `grep` -- alert if this string is NOT found in the file contents
 
 ---
 
 ## command
 
-runs a shell command. evaluates exit code and optionally stdout content.
+run a shell command and check its exit code or output.
 
 ```json
 {
-  "id":              "service-check",
-  "name":            "nginx status",
-  "type":            "command",
-  "command":         "systemctl is-active nginx",
-  "expect_exit":     0,
-  "output_contains": "active",
-  "timeout_s":       10,
-  "enabled":         true
+  "id": "backup-check",
+  "type": "command",
+  "name": "last backup check",
+  "command": "ls -t /backups/*.tar.gz | head -1",
+  "expect_exit_code": 0,
+  "stdout_contains": ".tar.gz",
+  "timeout_s": 30,
+  "enabled": true
 }
 ```
 
-| field | required | default | description |
-|-------|----------|---------|-------------|
-| command | yes | -- | shell command to run |
-| expect_exit | no | 0 | expected exit code |
-| output_contains | no | -- | string that must appear in stdout |
-| timeout_s | no | 15 | kill the command after this many seconds |
+fields:
+- `command` (required) -- shell command to run
+- `expect_exit_code` (default 0) -- expected exit code
+- `stdout_contains` -- string that must appear in stdout
+- `timeout_s` (default 30) -- command timeout in seconds
+
+---
+
+## process
+
+check if a named process is running, by process name or pid file.
+
+```json
+{
+  "id": "nginx-running",
+  "type": "process",
+  "name": "nginx",
+  "enabled": true
+}
+```
+
+or with a pid file:
+
+```json
+{
+  "id": "myapp-running",
+  "type": "process",
+  "name": "myapp process",
+  "pid_file": "/var/run/myapp.pid",
+  "enabled": true
+}
+```
+
+or matching against the full command line (useful for python scripts or java apps):
+
+```json
+{
+  "id": "worker-running",
+  "type": "process",
+  "name": "worker",
+  "match_full_cmdline": true,
+  "enabled": true
+}
+```
+
+fields:
+- `name` -- process name to search for. matched against the process name field (or full cmdline if `match_full_cmdline` is true). required if `pid_file` is not set.
+- `pid_file` -- path to a pid file. if provided, the pid inside is read and checked for liveness. takes priority over name-based search.
+- `match_full_cmdline` (default false) -- if true, match `name` against the full command
