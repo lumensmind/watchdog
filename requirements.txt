@@ -1,0 +1,8 @@
+# required
+python-dotenv>=1.0.0
+
+# for llm evaluation
+anthropic>=0.40.0
+
+# optional -- improves cpu/memory checks (falls back to /proc on linux without it)
+psutil>=5.9.0
