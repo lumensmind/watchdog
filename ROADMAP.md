@@ -4,7 +4,7 @@ the backlog. hourly commits work through this list.
 
 ## in progress
 
-- [ ] v0.1.x — core watch types working, llm eval, logging
+- [ ] v0.1.x -- core watch types working, llm eval, logging
 
 ## next up
 
@@ -16,7 +16,7 @@ the backlog. hourly commits work through this list.
 - [x] `ping` watch -- icmp ping with packet loss and latency
 
 ### features
-- [ ] `--since <time>` flag on runner -- only alert if condition has been true for at least N minutes (reduces noise)
+- [x] `--since <time>` flag on runner -- only alert if condition has been true for at least N minutes (reduces noise)
 - [ ] `--summary` flag -- print a one-line status for every watch (good for daily digests)
 - [ ] watch groups -- tag watches and run a group with `--group <tag>`
 - [ ] alert cooldown -- don't re-alert the same watch within N minutes after an alert
