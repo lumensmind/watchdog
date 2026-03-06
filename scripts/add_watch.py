@@ -1,159 +1,181 @@
 #!/usr/bin/env python3
 """
-add_watch.py -- add a new watch to watches.json.
+add_watch.py -- interactively add a new watch to watches.json, or via --json flag.
 
 usage:
-    python3 scripts/add_watch.py                     # interactive
-    python3 scripts/add_watch.py --json '{"id": "my-api", "type": "http", ...}'
-    python3 scripts/add_watch.py --list              # show existing watches
-    python3 scripts/add_watch.py --remove <id>       # remove a watch
-    python3 scripts/add_watch.py --toggle <id>       # enable/disable a watch
+    python3 scripts/add_watch.py
+    python3 scripts/add_watch.py --json '{"type": "port", "host": "localhost", "port": 5432, ...}'
 """
 
 import argparse
 import json
+import os
 import sys
+import uuid
 from pathlib import Path
 
 SKILL_DIR    = Path(__file__).parent.parent
 WATCHES_FILE = SKILL_DIR / "watches.json"
 
 
-def load_config() -> dict:
+def load_watches() -> dict:
     if WATCHES_FILE.exists():
         with open(WATCHES_FILE) as f:
             return json.load(f)
     return {"watches": []}
 
 
-def save_config(config: dict):
+def save_watches(data: dict):
     with open(WATCHES_FILE, "w") as f:
-        json.dump(config, f, indent=2)
+        json.dump(data, f, indent=2)
     print(f"saved to {WATCHES_FILE}")
 
 
-def list_watches(config: dict):
-    watches = config.get("watches", [])
-    if not watches:
-        print("no watches configured.")
-        return
-    print(f"\n{len(watches)} watch(es):\n")
-    for w in watches:
-        status = "on" if w.get("enabled", True) else "off"
-        print(f"  [{status}] {w['id']:25s} {w['type']:15s} {w.get('name', '')}")
-    print()
+def make_id(label: str) -> str:
+    slug = label.lower().replace(" ", "-")[:32]
+    slug = "".join(c for c in slug if c.isalnum() or c == "-")
+    return slug or str(uuid.uuid4())[:8]
 
 
-def interactive_add() -> dict:
-    """Walk the user through adding a watch interactively."""
-    print("\nadd a watch -- press ctrl+c to cancel\n")
+def prompt_http() -> dict:
+    url    = input("  url (e.g. https://example.com/health): ").strip()
+    expect = input("  expected status code [200]: ").strip() or "200"
+    match  = input("  body must contain (leave blank to skip): ").strip()
+    w = {"type": "http", "url": url, "expect_status": int(expect)}
+    if match:
+        w["body_contains"] = match
+    return w
 
-    watch_types = ["http", "rss", "system_disk", "system_cpu", "system_memory", "file", "command"]
-    print("watch types: " + ", ".join(watch_types))
-    wtype = input("type: ").strip().lower()
-    if wtype not in watch_types:
-        print(f"unknown type '{wtype}'")
+
+def prompt_rss() -> dict:
+    url     = input("  feed url: ").strip()
+    keyword = input("  keyword to match (leave blank to skip): ").strip()
+    w = {"type": "rss", "url": url}
+    if keyword:
+        w["keyword"] = keyword
+    return w
+
+
+def prompt_system_disk() -> dict:
+    path = input("  path to check [/]: ").strip() or "/"
+    warn = input("  warn above % [80]: ").strip() or "80"
+    return {"type": "system_disk", "path": path, "warn_above_pct": int(warn)}
+
+
+def prompt_system_cpu() -> dict:
+    warn = input("  warn above % [90]: ").strip() or "90"
+    return {"type": "system_cpu", "warn_above_pct": int(warn)}
+
+
+def prompt_system_memory() -> dict:
+    warn = input("  warn above % [90]: ").strip() or "90"
+    return {"type": "system_memory", "warn_above_pct": int(warn)}
+
+
+def prompt_file() -> dict:
+    path      = input("  file path: ").strip()
+    max_age   = input("  max age in seconds (leave blank to skip): ").strip()
+    contains  = input("  file must contain text (leave blank to skip): ").strip()
+    w = {"type": "file", "path": path}
+    if max_age:
+        w["max_age_s"] = int(max_age)
+    if contains:
+        w["contains"] = contains
+    return w
+
+
+def prompt_command() -> dict:
+    cmd    = input("  shell command: ").strip()
+    expect = input("  expected exit code [0]: ").strip() or "0"
+    match  = input("  output must contain (leave blank to skip): ").strip()
+    w = {"type": "command", "command": cmd, "expect_exit": int(expect)}
+    if match:
+        w["output_contains"] = match
+    return w
+
+
+def prompt_process() -> dict:
+    name     = input("  process name (leave blank if using pid file): ").strip()
+    pid_file = input("  pid file path (leave blank to skip): ").strip()
+    require  = input("  require running? [yes]: ").strip().lower()
+    require  = require not in ("no", "n", "false")
+    w = {"type": "process", "require_running": require}
+    if name:
+        w["name"] = name
+    if pid_file:
+        w["pid_file"] = pid_file
+    return w
+
+
+def prompt_port() -> dict:
+    host    = input("  host [localhost]: ").strip() or "localhost"
+    port    = input("  port number: ").strip()
+    timeout = input("  timeout in seconds [10]: ").strip() or "10"
+    w = {
+        "type": "port",
+        "host": host,
+        "port": int(port),
+        "timeout_s": int(timeout),
+    }
+    return w
+
+
+PROMPTS = {
+    "http":          prompt_http,
+    "rss":           prompt_rss,
+    "system_disk":   prompt_system_disk,
+    "system_cpu":    prompt_system_cpu,
+    "system_memory": prompt_system_memory,
+    "file":          prompt_file,
+    "command":       prompt_command,
+    "process":       prompt_process,
+    "port":          prompt_port,
+}
+
+
+def interactive_add():
+    print("add a new watch")
+    print("---------------")
+    types = list(PROMPTS.keys())
+    for i, t in enumerate(types, 1):
+        print(f"  {i}. {t}")
+    choice = input("watch type: ").strip().lower()
+
+    # allow numeric pick
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(types):
+            choice = types[idx]
+
+    if choice not in PROMPTS:
+        print(f"unknown type: {choice}")
         sys.exit(1)
 
-    watch_id = input("id (slug, no spaces): ").strip().lower().replace(" ", "-")
-    name     = input("name (friendly label): ").strip() or watch_id
-    watch = {"id": watch_id, "name": name, "type": wtype, "enabled": True}
+    watch = PROMPTS[choice]()
+    label = input("label (short description): ").strip()
+    watch["id"]      = make_id(label or choice)
+    watch["label"]   = label or choice
+    watch["enabled"] = True
 
-    if wtype == "http":
-        watch["url"]            = input("url: ").strip()
-        watch["expect_status"]  = int(input("expected status code [200]: ").strip() or "200")
-        watch["timeout_s"]      = int(input("timeout seconds [10]: ").strip() or "10")
-        body_check = input("body must contain (leave blank to skip): ").strip()
-        if body_check:
-            watch["body_contains"] = body_check
-
-    elif wtype == "rss":
-        watch["url"]     = input("feed url: ").strip()
-        keyword = input("keyword to watch for (leave blank for any new entry): ").strip()
-        if keyword:
-            watch["keyword"] = keyword
-
-    elif wtype == "system_disk":
-        watch["path"]               = input("path [/]: ").strip() or "/"
-        watch["alert_threshold_pct"] = int(input("alert when above % [85]: ").strip() or "85")
-
-    elif wtype == "system_cpu":
-        watch["alert_threshold_pct"] = int(input("alert when above % [90]: ").strip() or "90")
-
-    elif wtype == "system_memory":
-        watch["alert_threshold_pct"] = int(input("alert when above % [90]: ").strip() or "90")
-
-    elif wtype == "file":
-        watch["path"]          = input("file path: ").strip()
-        watch["expect_exists"] = True
-        max_age = input("alert if not modified in N seconds (leave blank to skip): ").strip()
-        if max_age:
-            watch["max_age_s"] = int(max_age)
-        grep = input("alert if file does not contain (leave blank to skip): ").strip()
-        if grep:
-            watch["contains"] = grep
-
-    elif wtype == "command":
-        watch["command"]      = input("shell command: ").strip()
-        watch["expect_exit"]  = int(input("expected exit code [0]: ").strip() or "0")
-        output_check = input("output must contain (leave blank to skip): ").strip()
-        if output_check:
-            watch["output_contains"] = output_check
-        watch["timeout_s"] = int(input("timeout seconds [15]: ").strip() or "15")
-
-    return watch
+    data = load_watches()
+    data["watches"].append(watch)
+    save_watches(data)
+    print(f"added watch: {watch['id']}")
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--json",   help="add watch from json string")
-    parser.add_argument("--list",   action="store_true", help="list all watches")
-    parser.add_argument("--remove", metavar="ID", help="remove a watch by id")
-    parser.add_argument("--toggle", metavar="ID", help="toggle a watch on/off")
-    args = parser.parse_args()
-
-    config = load_config()
-
-    if args.list:
-        list_watches(config)
-        return
-
-    if args.remove:
-        before = len(config["watches"])
-        config["watches"] = [w for w in config["watches"] if w["id"] != args.remove]
-        if len(config["watches"]) == before:
-            print(f"no watch with id '{args.remove}'")
-            sys.exit(1)
-        save_config(config)
-        print(f"removed: {args.remove}")
-        return
-
-    if args.toggle:
-        for w in config["watches"]:
-            if w["id"] == args.toggle:
-                w["enabled"] = not w.get("enabled", True)
-                save_config(config)
-                print(f"{'enabled' if w['enabled'] else 'disabled'}: {args.toggle}")
-                return
-        print(f"no watch with id '{args.toggle}'")
+def json_add(raw: str):
+    try:
+        watch = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"invalid json: {e}")
         sys.exit(1)
 
-    if args.json:
-        new_watch = json.loads(args.json)
-    else:
-        new_watch = interactive_add()
+    if "id" not in watch:
+        watch["id"] = make_id(watch.get("label", watch.get("type", "watch")))
+    if "enabled" not in watch:
+        watch["enabled"] = True
 
-    # check for duplicate id
-    existing_ids = {w["id"] for w in config["watches"]}
-    if new_watch["id"] in existing_ids:
-        print(f"watch id '{new_watch['id']}' already exists. use --remove to delete it first.")
-        sys.exit(1)
-
-    config["watches"].append(new_watch)
-    save_config(config)
-    print(f"\nadded: {new_watch['id']} ({new_watch['type']})")
-    print(f"test it: python3 scripts/watch_runner.py --id {new_watch['id']} --verbose")
-
-
-if __name__ == "__main__":
-    main()
+    data = load_watches()
+    data["watches"].append(watch)
+    save_watches(data)
+    print(
