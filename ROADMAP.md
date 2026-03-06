@@ -13,7 +13,7 @@ the backlog. hourly commits work through this list.
 - [x] `port` watch -- tcp connect check to host:port
 - [x] `ssl_cert` watch -- days until ssl certificate expires
 - [x] `json_api` watch -- poll a json api, evaluate a specific field with a condition (e.g. `status != "ok"`)
-- [ ] `ping` watch -- icmp ping with packet loss and latency
+- [x] `ping` watch -- icmp ping with packet loss and latency
 
 ### features
 - [ ] `--since <time>` flag on runner -- only alert if condition has been true for at least N minutes (reduces noise)
