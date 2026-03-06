@@ -1,51 +1,36 @@
 {
   "watches": [
     {
-      "id": "api-health",
-      "name": "production api",
+      "id": "example-http",
+      "name": "example http check",
       "type": "http",
-      "url": "https://api.example.com/health",
-      "expect_status": 200,
-      "timeout_s": 5,
-      "enabled": true
+      "enabled": false,
+      "url": "https://example.com",
+      "timeout_s": 10,
+      "expect_status": 200
     },
     {
-      "id": "disk-home",
-      "name": "home disk space",
+      "id": "example-disk",
+      "name": "root disk usage",
       "type": "system_disk",
-      "path": "/home",
-      "alert_threshold_pct": 85,
-      "enabled": true
+      "enabled": false,
+      "path": "/",
+      "warn_above_pct": 85
     },
     {
-      "id": "cpu-load",
-      "name": "cpu usage",
+      "id": "example-cpu",
+      "name": "cpu load",
       "type": "system_cpu",
-      "alert_threshold_pct": 90,
-      "enabled": true
+      "enabled": false,
+      "warn_above_pct": 90
     },
     {
-      "id": "memory-usage",
-      "name": "memory pressure",
+      "id": "example-memory",
+      "name": "memory usage",
       "type": "system_memory",
-      "alert_threshold_pct": 90,
-      "enabled": true
+      "enabled": false,
+      "warn_above_pct": 90
     },
     {
-      "id": "openclaw-blog",
-      "name": "openclaw blog",
-      "type": "rss",
-      "url": "https://openclaw.ai/blog/rss.xml",
-      "enabled": true
-    },
-    {
-      "id": "service-nginx",
-      "name": "nginx running",
-      "type": "command",
-      "command": "systemctl is-active nginx",
-      "expect_exit": 0,
-      "timeout_s": 5,
-      "enabled": false
-    }
-  ]
-}
+      "id": "example-rss",
+      "name": "hacker news feed",
