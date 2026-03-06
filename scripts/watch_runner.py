@@ -92,68 +92,55 @@ def check_rss(watch: dict) -> dict:
 
     try:
         with urllib.request.urlopen(url, timeout=15) as resp:
-            raw = resp.read()
-        root = ET.fromstring(raw)
+            body = resp.read().decode("utf-8", errors="replace")
+        root = ET.fromstring(body)
+        ns = {}
+        items = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
+        entries = []
+        for item in items[:10]:
+            title_el = item.find("title")
+            title = title_el.text.strip() if title_el is not None and title_el.text else ""
+            desc_el = item.find("description") or item.find("{http://www.w3.org/2005/Atom}summary")
+            desc = desc_el.text.strip() if desc_el is not None and desc_el.text else ""
+            entries.append({"title": title, "description": desc[:200]})
+        matched = []
+        if keyword:
+            kw = keyword.lower()
+            for e in entries:
+                if kw in e["title"].lower() or kw in e["description"].lower():
+                    matched.append(e)
+        return {
+            "ok": True,
+            "entry_count": len(entries),
+            "entries": entries[:5],
+            "keyword_matches": matched if keyword else None,
+            "error": None,
+        }
     except Exception as e:
-        return {"ok": False, "error": str(e), "entries": []}
-
-    ns = ""
-    if root.tag.startswith("{"):
-        ns = root.tag.split("}")[0] + "}"
-
-    items = root.findall(f".//{ns}item") or root.findall(f".//{ns}entry")
-    entries = []
-    for item in items[:10]:
-        title = (item.findtext(f"{ns}title") or "").strip()
-        link  = (item.findtext(f"{ns}link")  or "").strip()
-        desc  = (item.findtext(f"{ns}description") or item.findtext(f"{ns}summary") or "").strip()
-        entries.append({"title": title, "link": link, "desc": desc[:200]})
-
-    matched = []
-    if keyword:
-        kw = keyword.lower()
-        for e in entries:
-            if kw in e["title"].lower() or kw in e["desc"].lower():
-                matched.append(e)
-
-    return {
-        "ok": True,
-        "error": None,
-        "entry_count": len(entries),
-        "entries": entries[:5],
-        "keyword": keyword,
-        "keyword_matches": matched if keyword else None,
-    }
+        return {"ok": False, "entry_count": 0, "entries": [], "error": str(e)}
 
 
 def check_system_disk(watch: dict) -> dict:
     path    = watch.get("path", "/")
-    warn_pct = watch.get("warn_above_pct", 80)
-
+    warn_pct = watch.get("warn_percent", 80)
     try:
         import shutil
         total, used, free = shutil.disk_usage(path)
         pct = round(used / total * 100, 1)
-        return {"ok": pct < warn_pct, "path": path, "used_pct": pct,
-                "used_gb": round(used/1e9, 2), "total_gb": round(total/1e9, 2),
-                "free_gb": round(free/1e9, 2), "warn_above_pct": warn_pct, "error": None}
+        return {"ok": pct < warn_pct, "used_percent": pct, "free_gb": round(free / 1e9, 2),
+                "total_gb": round(total / 1e9, 2), "error": None}
     except Exception as e:
-        return {"ok": False, "path": path, "error": str(e)}
+        return {"ok": False, "used_percent": None, "error": str(e)}
 
 
 def check_system_cpu(watch: dict) -> dict:
-    warn_pct = watch.get("warn_above_pct", 90)
-
-    # try psutil first
+    warn_pct = watch.get("warn_percent", 85)
     try:
         import psutil
         pct = psutil.cpu_percent(interval=1)
-        return {"ok": pct < warn_pct, "used_pct": pct, "warn_above_pct": warn_pct,
-                "source": "psutil", "error": None}
+        return {"ok": pct < warn_pct, "cpu_percent": pct, "error": None}
     except ImportError:
         pass
-
-    # fallback: read /proc/stat twice
     try:
         def read_stat():
             with open("/proc/stat") as f:
@@ -162,126 +149,112 @@ def check_system_cpu(watch: dict) -> dict:
             idle = vals[3]
             total = sum(vals)
             return idle, total
-
-        idle1, total1 = read_stat()
+        i1, t1 = read_stat()
         time.sleep(1)
-        idle2, total2 = read_stat()
-        diff_total = total2 - total1
-        diff_idle  = idle2  - idle1
-        pct = round((1 - diff_idle / diff_total) * 100, 1) if diff_total else 0.0
-        return {"ok": pct < warn_pct, "used_pct": pct, "warn_above_pct": warn_pct,
-                "source": "/proc/stat", "error": None}
+        i2, t2 = read_stat()
+        pct = round(100 * (1 - (i2 - i1) / (t2 - t1)), 1)
+        return {"ok": pct < warn_pct, "cpu_percent": pct, "error": None}
     except Exception as e:
-        return {"ok": False, "used_pct": None, "error": str(e)}
+        return {"ok": False, "cpu_percent": None, "error": str(e)}
 
 
 def check_system_memory(watch: dict) -> dict:
-    warn_pct = watch.get("warn_above_pct", 90)
-
+    warn_pct = watch.get("warn_percent", 85)
     try:
         import psutil
         vm = psutil.virtual_memory()
         pct = vm.percent
-        return {"ok": pct < warn_pct, "used_pct": pct, "warn_above_pct": warn_pct,
-                "total_gb": round(vm.total/1e9, 2), "available_gb": round(vm.available/1e9, 2),
-                "source": "psutil", "error": None}
+        return {"ok": pct < warn_pct, "used_percent": pct,
+                "free_gb": round(vm.available / 1e9, 2),
+                "total_gb": round(vm.total / 1e9, 2), "error": None}
     except ImportError:
         pass
-
     try:
         info = {}
         with open("/proc/meminfo") as f:
             for line in f:
-                key, val = line.split(":", 1)
-                info[key.strip()] = int(val.split()[0])
-        total     = info["MemTotal"]
-        available = info.get("MemAvailable", info.get("MemFree", 0))
-        used      = total - available
-        pct       = round(used / total * 100, 1)
-        return {"ok": pct < warn_pct, "used_pct": pct, "warn_above_pct": warn_pct,
-                "total_gb": round(total/1e6, 2), "available_gb": round(available/1e6, 2),
-                "source": "/proc/meminfo", "error": None}
+                k, v = line.split(":")
+                info[k.strip()] = int(v.strip().split()[0])
+        total = info["MemTotal"]
+        avail = info.get("MemAvailable", info.get("MemFree", 0))
+        pct = round((total - avail) / total * 100, 1)
+        return {"ok": pct < warn_pct, "used_percent": pct,
+                "free_gb": round(avail / 1e6, 2),
+                "total_gb": round(total / 1e6, 2), "error": None}
     except Exception as e:
-        return {"ok": False, "used_pct": None, "error": str(e)}
+        return {"ok": False, "used_percent": None, "error": str(e)}
 
 
 def check_file(watch: dict) -> dict:
+    import hashlib
     path = watch.get("path")
     if not path:
-        return {"ok": False, "error": "no path configured"}
-
+        return {"ok": False, "error": "no path specified"}
     p = Path(path)
     if not p.exists():
-        return {"ok": False, "exists": False, "error": f"file not found: {path}"}
-
+        must_exist = watch.get("must_exist", True)
+        return {"ok": not must_exist, "exists": False, "error": None if not must_exist else "file not found"}
     stat = p.stat()
     age_s = time.time() - stat.st_mtime
     result = {
-        "ok": True,
-        "exists": True,
+        "ok": True, "exists": True,
         "size_bytes": stat.st_size,
-        "age_s": int(age_s),
+        "age_seconds": int(age_s),
         "error": None,
     }
-
-    max_age_s = watch.get("max_age_s")
+    max_age_s = watch.get("max_age_seconds")
     if max_age_s and age_s > max_age_s:
         result["ok"] = False
-        result["error"] = f"file is {int(age_s)}s old, max allowed {max_age_s}s"
-
-    grep = watch.get("contains")
+        result["error"] = f"file is {int(age_s)}s old, max is {max_age_s}s"
+    grep = watch.get("grep")
     if grep:
         try:
-            text = p.read_text(errors="replace")
-            found = grep in text
-            result["contains_match"] = found
-            if not found:
+            content = p.read_text(errors="replace")
+            result["grep_match"] = grep in content
+            if watch.get("grep_must_match") and not result["grep_match"]:
                 result["ok"] = False
-                result["error"] = f"'{grep}' not found in file"
+                result["error"] = f"grep '{grep}' not found in file"
         except Exception as e:
-            result["ok"] = False
+            result["grep_match"] = None
             result["error"] = str(e)
-
     return result
 
 
 def check_command(watch: dict) -> dict:
-    cmd          = watch.get("command")
-    expect_exit  = watch.get("expect_exit_code", 0)
-    output_match = watch.get("output_contains")
-    timeout      = watch.get("timeout_s", 30)
+    cmd         = watch.get("command")
+    expect_exit = watch.get("expect_exit_code", 0)
+    stdout_match = watch.get("stdout_contains")
+    timeout     = watch.get("timeout_s", 15)
 
     if not cmd:
-        return {"ok": False, "error": "no command configured"}
+        return {"ok": False, "error": "no command specified"}
 
+    start = time.monotonic()
     try:
         proc = subprocess.run(
             cmd, shell=True, capture_output=True, text=True, timeout=timeout
         )
-        stdout = proc.stdout.strip()
-        stderr = proc.stderr.strip()
-        exit_ok = proc.returncode == expect_exit
-
-        result = {
-            "ok": exit_ok,
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        ok = (proc.returncode == expect_exit)
+        stdout_sample = proc.stdout[:500]
+        match_found = None
+        if stdout_match:
+            match_found = stdout_match in proc.stdout
+            if ok and not match_found:
+                ok = False
+        return {
+            "ok": ok,
             "exit_code": proc.returncode,
-            "stdout": stdout[:500],
-            "stderr": stderr[:200],
-            "error": None if exit_ok else f"exit code {proc.returncode}, expected {expect_exit}",
+            "elapsed_ms": elapsed_ms,
+            "stdout_sample": stdout_sample,
+            "stdout_contains_match": match_found,
+            "stderr_sample": proc.stderr[:200],
+            "error": None if ok else f"exit {proc.returncode}, expected {expect_exit}",
         }
-
-        if exit_ok and output_match:
-            if output_match not in stdout:
-                result["ok"] = False
-                result["error"] = f"output_contains '{output_match}' not found in stdout"
-            result["output_match"] = output_match in stdout
-
-        return result
     except subprocess.TimeoutExpired:
-        return {"ok": False, "exit_code": None, "stdout": "", "stderr": "",
-                "error": f"command timed out after {timeout}s"}
+        return {"ok": False, "exit_code": None, "error": f"command timed out after {timeout}s"}
     except Exception as e:
-        return {"ok": False, "exit_code": None, "stdout": "", "stderr": "", "error": str(e)}
+        return {"ok": False, "exit_code": None, "error": str(e)}
 
 
 def check_process(watch: dict) -> dict:
@@ -291,48 +264,46 @@ def check_process(watch: dict) -> dict:
     if pid_file:
         pf = Path(pid_file)
         if not pf.exists():
-            return {"ok": False, "error": f"pid file not found: {pid_file}", "source": "pid_file"}
+            return {"ok": False, "error": f"pid file not found: {pid_file}", "pid": None}
         try:
             pid = int(pf.read_text().strip())
         except Exception as e:
-            return {"ok": False, "error": f"could not read pid file: {e}", "source": "pid_file"}
-
-        pid_path = Path(f"/proc/{pid}")
-        if pid_path.exists():
+            return {"ok": False, "error": f"could not read pid file: {e}", "pid": None}
+        proc_path = Path(f"/proc/{pid}")
+        if proc_path.exists():
             return {"ok": True, "pid": pid, "source": "pid_file", "error": None}
+        try:
+            import psutil
+            if psutil.pid_exists(pid):
+                return {"ok": True, "pid": pid, "source": "pid_file", "error": None}
+        except ImportError:
+            pass
+        return {"ok": False, "pid": pid, "error": f"pid {pid} from pid file is not running", "source": "pid_file"}
 
-        # pid_file exists but process is gone -- try ps as fallback if name given
-        if not name:
-            return {"ok": False, "pid": pid, "error": f"process with pid {pid} not running", "source": "pid_file"}
+    if name:
+        try:
+            import psutil
+            matches = [p.info for p in psutil.process_iter(["pid", "name", "cmdline"])
+                       if name.lower() in (p.info["name"] or "").lower()
+                       or any(name.lower() in (c or "").lower() for c in (p.info["cmdline"] or []))]
+            if matches:
+                return {"ok": True, "pid": matches[0]["pid"], "match_count": len(matches),
+                        "source": "psutil", "error": None}
+            return {"ok": False, "pid": None, "match_count": 0,
+                    "source": "psutil", "error": f"no process matching '{name}' found"}
+        except ImportError:
+            pass
+        try:
+            result = subprocess.run(["pgrep", "-f", name], capture_output=True, text=True)
+            pids = [int(p) for p in result.stdout.strip().splitlines() if p.strip()]
+            ok = len(pids) > 0
+            return {"ok": ok, "pids": pids, "match_count": len(pids),
+                    "source": "pgrep",
+                    "error": None if ok else f"no process matching '{name}' found"}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "pid": None}
 
-    if not name:
-        return {"ok": False, "error": "no name or pid_file configured"}
-
-    # search by name via /proc or ps
-    try:
-        import psutil
-        found = [p for p in psutil.process_iter(["name", "cmdline"])
-                 if name.lower() in (p.info["name"] or "").lower()
-                 or any(name.lower() in arg.lower() for arg in (p.info["cmdline"] or []))]
-        if found:
-            pids = [p.pid for p in found[:5]]
-            return {"ok": True, "name": name, "pids": pids, "count": len(found),
-                    "source": "psutil", "error": None}
-        return {"ok": False, "name": name, "pids": [], "count": 0,
-                "source": "psutil", "error": f"no process matching '{name}' found"}
-    except ImportError:
-        pass
-
-    try:
-        result = subprocess.run(["pgrep", "-f", name], capture_output=True, text=True)
-        pids = [int(p) for p in result.stdout.strip().splitlines() if p.strip().isdigit()]
-        if pids:
-            return {"ok": True, "name": name, "pids": pids, "count": len(pids),
-                    "source": "pgrep", "error": None}
-        return {"ok": False, "name": name, "pids": [], "count": 0,
-                "source": "pgrep", "error": f"no process matching '{name}' found"}
-    except Exception as e:
-        return {"ok": False, "name": name, "error": str(e)}
+    return {"ok": False, "error": "must specify 'name' or 'pid_file'"}
 
 
 def check_port(watch: dict) -> dict:
@@ -340,69 +311,320 @@ def check_port(watch: dict) -> dict:
 
     host    = watch.get("host", "localhost")
     port    = watch.get("port")
-    timeout = watch.get("timeout_s", 10)
+    timeout = watch.get("timeout_s", 5)
 
     if port is None:
-        return {"ok": False, "error": "no port configured"}
+        return {"ok": False, "error": "no port specified"}
 
     start = time.monotonic()
     try:
         with socket.create_connection((host, port), timeout=timeout):
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            return {"ok": True, "host": host, "port": port,
-                    "elapsed_ms": elapsed_ms, "error": None}
+            return {"ok": True, "host": host, "port": port, "elapsed_ms": elapsed_ms, "error": None}
     except Exception as e:
         elapsed_ms = int((time.monotonic() - start) * 1000)
-        return {"ok": False, "host": host, "port": port,
-                "elapsed_ms": elapsed_ms, "error": str(e)}
+        return {"ok": False, "host": host, "port": port, "elapsed_ms": elapsed_ms, "error": str(e)}
 
 
 def check_ssl_cert(watch: dict) -> dict:
     import ssl
     import socket
 
-    host    = watch.get("host")
-    port    = watch.get("port", 443)
-    timeout = watch.get("timeout_s", 10)
-    warn_days = watch.get("warn_below_days", 14)
+    host     = watch.get("host")
+    port     = watch.get("port", 443)
+    warn_days = watch.get("warn_days", 14)
 
     if not host:
-        return {"ok": False, "error": "no host configured"}
+        return {"ok": False, "error": "no host specified"}
 
     try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((host, port), timeout=timeout) as sock:
-            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                cert = ssock.getpeercert()
+        with ctx.wrap_socket(socket.socket(), server_hostname=host) as s:
+            s.settimeout(10)
+            s.connect((host, port))
+            cert = s.getpeercert()
+        expire_str = cert["notAfter"]
+        expire_dt = datetime.strptime(expire_str, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        days_left = (expire_dt - now).days
+        ok = days_left >= warn_days
+        return {
+            "ok": ok,
+            "host": host,
+            "days_until_expiry": days_left,
+            "expires": expire_str,
+            "error": None if ok else f"cert expires in {days_left} days (warn threshold: {warn_days})",
+        }
     except Exception as e:
-        return {"ok": False, "host": host, "port": port, "error": str(e),
-                "days_remaining": None, "expires": None}
+        return {"ok": False, "host": host, "days_until_expiry": None, "error": str(e)}
 
-    # cert["notAfter"] is a string like "Jan  1 00:00:00 2026 GMT"
+
+def check_json_api(watch: dict) -> dict:
+    """
+    poll a json api and evaluate a field with a condition.
+
+    watch config fields:
+        url           -- the api endpoint to GET
+        field         -- dot-notation path to the value to extract, e.g. "status" or "data.health"
+        condition     -- expression to evaluate, e.g. '!= "ok"' or '> 100' or '== true'
+        headers       -- optional dict of request headers (e.g. for auth)
+        timeout_s     -- request timeout in seconds (default 10)
+        expect_status -- expected http status code (default 200)
+
+    the condition is evaluated as:  <extracted_value> <condition>
+    if the condition is true, ok=False (meaning the watch is triggered / something is wrong).
+    if the condition is false, ok=True (everything looks fine).
+
+    examples:
+        field: "status",        condition: '!= "ok"'   -- alert when status is not "ok"
+        field: "queue_depth",   condition: "> 1000"    -- alert when queue is too deep
+        field: "healthy",       condition: "== false"  -- alert when healthy is false
+        field: "error_rate",    condition: ">= 0.05"   -- alert when error rate >= 5%
+    """
+    import urllib.request
+    import urllib.error
+
+    url          = watch.get("url")
+    field        = watch.get("field")
+    condition    = watch.get("condition")
+    headers      = watch.get("headers", {})
+    timeout      = watch.get("timeout_s", 10)
+    expect_status = watch.get("expect_status", 200)
+
+    if not url:
+        return {"ok": False, "error": "no url specified"}
+    if not field:
+        return {"ok": False, "error": "no field specified"}
+    if not condition:
+        return {"ok": False, "error": "no condition specified"}
+
+    # fetch the api
+    start = time.monotonic()
     try:
-        not_after_str = cert.get("notAfter", "")
-        not_after = datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
-        not_after = not_after.replace(tzinfo=timezone.utc)
-        now = datetime.now(tz=timezone.utc)
-        days_remaining = (not_after - now).days
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            status = resp.status
+            body = resp.read(65536).decode("utf-8", errors="replace")
     except Exception as e:
-        return {"ok": False, "host": host, "port": port,
-                "error": f"could not parse cert expiry: {e}",
-                "days_remaining": None, "expires": not_after_str}
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return {
+            "ok": False,
+            "url": url,
+            "field": field,
+            "condition": condition,
+            "field_value": None,
+            "condition_triggered": None,
+            "elapsed_ms": elapsed_ms,
+            "error": str(e),
+        }
 
-    ok = days_remaining >= warn_days
+    if status != expect_status:
+        return {
+            "ok": False,
+            "url": url,
+            "field": field,
+            "condition": condition,
+            "http_status": status,
+            "field_value": None,
+            "condition_triggered": None,
+            "elapsed_ms": elapsed_ms,
+            "error": f"expected http {expect_status}, got {status}",
+        }
+
+    # parse json
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as e:
+        return {
+            "ok": False,
+            "url": url,
+            "field": field,
+            "condition": condition,
+            "field_value": None,
+            "condition_triggered": None,
+            "elapsed_ms": elapsed_ms,
+            "error": f"json parse error: {e}",
+            "body_sample": body[:300],
+        }
+
+    # extract field via dot notation
+    field_value, extract_error = _extract_field(data, field)
+    if extract_error:
+        return {
+            "ok": False,
+            "url": url,
+            "field": field,
+            "condition": condition,
+            "http_status": status,
+            "field_value": None,
+            "condition_triggered": None,
+            "elapsed_ms": elapsed_ms,
+            "error": extract_error,
+        }
+
+    # evaluate the condition
+    condition_triggered, eval_error = _eval_condition(field_value, condition)
+    if eval_error:
+        return {
+            "ok": False,
+            "url": url,
+            "field": field,
+            "condition": condition,
+            "http_status": status,
+            "field_value": field_value,
+            "condition_triggered": None,
+            "elapsed_ms": elapsed_ms,
+            "error": eval_error,
+        }
+
+    # condition_triggered=True means the bad condition fired -- watch is not ok
+    ok = not condition_triggered
+
     return {
         "ok": ok,
-        "host": host,
-        "port": port,
-        "expires": not_after_str,
-        "days_remaining": days_remaining,
-        "warn_below_days": warn_days,
-        "error": None if ok else f"cert expires in {days_remaining} days (warn threshold: {warn_days})",
+        "url": url,
+        "field": field,
+        "field_value": field_value,
+        "condition": condition,
+        "condition_triggered": condition_triggered,
+        "http_status": status,
+        "elapsed_ms": elapsed_ms,
+        "error": None if ok else f"condition '{field} {condition}' triggered (value: {repr(field_value)})",
     }
 
 
-# ── dispatcher ─────────────────────────────────────────────────────────────────
+def _extract_field(data: dict, field_path: str):
+    """
+    extract a value from a nested dict using dot notation.
+    returns (value, error_string_or_none).
+    supports simple keys and integer list indices, e.g. "results.0.status".
+    """
+    parts = field_path.split(".")
+    current = data
+    for part in parts:
+        if isinstance(current, dict):
+            if part not in current:
+                return None, f"field '{part}' not found in json (path: {field_path})"
+            current = current[part]
+        elif isinstance(current, list):
+            try:
+                idx = int(part)
+                current = current[idx]
+            except (ValueError, IndexError):
+                return None, f"cannot index list with '{part}' (path: {field_path})"
+        else:
+            return None, f"cannot traverse into {type(current).__name__} at '{part}' (path: {field_path})"
+    return current, None
+
+
+def _eval_condition(value, condition: str):
+    """
+    evaluate a condition string against a value.
+    condition is an operator + operand, e.g. '!= "ok"' or '> 100' or '== false'.
+
+    supported operators: ==, !=, >, >=, <, <=, contains, not_contains
+
+    returns (triggered: bool, error: str or None).
+    triggered=True means the condition fired (something is wrong).
+    """
+    condition = condition.strip()
+
+    # special string operators
+    if condition.startswith("contains "):
+        operand = condition[len("contains "):].strip().strip('"').strip("'")
+        if not isinstance(value, str):
+            return None, f"'contains' requires a string field, got {type(value).__name__}"
+        return operand in value, None
+
+    if condition.startswith("not_contains "):
+        operand = condition[len("not_contains "):].strip().strip('"').strip("'")
+        if not isinstance(value, str):
+            return None, f"'not_contains' requires a string field, got {type(value).__name__}"
+        return operand not in value, None
+
+    # standard comparison operators
+    operators = ["!=", "==", ">=", "<=", ">", "<"]
+    op = None
+    operand_str = None
+    for candidate in operators:
+        if condition.startswith(candidate):
+            op = candidate
+            operand_str = condition[len(candidate):].strip()
+            break
+
+    if op is None:
+        return None, f"unrecognized condition format: '{condition}' -- expected operator like '== \"ok\"' or '> 100'"
+
+    # parse operand -- handle string literals, booleans, null, numbers
+    operand = _parse_operand(operand_str)
+
+    # coerce value for numeric comparisons when sensible
+    if op in (">", ">=", "<", "<="):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None, f"operator '{op}' requires a numeric field, got {repr(value)}"
+        try:
+            operand = float(operand)
+        except (TypeError, ValueError):
+            return None, f"operator '{op}' requires a numeric operand, got {repr(operand_str)}"
+
+    try:
+        if op == "==":
+            triggered = value == operand
+        elif op == "!=":
+            triggered = value != operand
+        elif op == ">":
+            triggered = value > operand
+        elif op == ">=":
+            triggered = value >= operand
+        elif op == "<":
+            triggered = value < operand
+        elif op == "<=":
+            triggered = value <= operand
+        else:
+            return None, f"unknown operator '{op}'"
+    except TypeError as e:
+        return None, f"comparison failed: {e}"
+
+    return triggered, None
+
+
+def _parse_operand(operand_str: str):
+    """
+    parse a condition operand string into a python value.
+    handles: quoted strings, true/false, null/none, integers, floats.
+    """
+    s = operand_str.strip()
+
+    # quoted string
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        return s[1:-1]
+
+    # booleans
+    if s.lower() == "true":
+        return True
+    if s.lower() == "false":
+        return False
+
+    # null
+    if s.lower() in ("null", "none"):
+        return None
+
+    # numeric
+    try:
+        if "." in s:
+            return float(s)
+        return int(s)
+    except ValueError:
+        pass
+
+    # fallback: return as-is string
+    return s
+
+
+# ── dispatch ───────────────────────────────────────────────────────────────────
 
 CHECKERS = {
     "http":          check_http,
@@ -415,6 +637,7 @@ CHECKERS = {
     "process":       check_process,
     "port":          check_port,
     "ssl_cert":      check_ssl_cert,
+    "json_api":      check_json_api,
 }
 
 
@@ -431,22 +654,14 @@ def run_check(watch: dict) -> dict:
 
 # ── llm eval ───────────────────────────────────────────────────────────────────
 
-def llm_evaluate(watch: dict, result: dict, history: list) -> dict:
-    """
-    call anthropic claude to evaluate the result.
-    returns {"alert": bool, "severity": str, "summary": str}
-    falls back to rule-based eval if api is unavailable.
-    """
+def llm_evaluate(watch: dict, result: dict, history: list) -> Optional[dict]:
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        return rule_based_eval(watch, result)
+        return None
 
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+    import urllib.request as ur
 
-        history_snippet = json.dumps(history[-3:], indent=2) if history else "none"
-        prompt = f"""you are a monitoring assistant evaluating a watch result.
+    prompt = f"""you are a monitoring assistant. evaluate the following watch result and decide if it needs an alert.
 
 watch definition:
 {json.dumps(watch, indent=2)}
@@ -454,124 +669,108 @@ watch definition:
 current result:
 {json.dumps(result, indent=2)}
 
-recent history (last few results):
-{history_snippet}
+recent history (last {len(history)} runs):
+{json.dumps(history, indent=2)}
 
-based on the above, decide:
-1. should an alert be raised? (true/false)
-2. severity: info, warning, or critical
-3. one-line summary of what is happening
+respond with a json object only, no other text:
+{{
+  "alert": true or false,
+  "severity": "info" | "warning" | "critical",
+  "summary": "one line explanation"
+}}"""
 
-respond with valid json only, no explanation:
-{{"alert": true/false, "severity": "info|warning|critical", "summary": "..."}}"""
+    payload = json.dumps({
+        "model": "claude-3-haiku-20240307",
+        "max_tokens": 256,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode()
 
-        msg = client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = msg.content[0].text.strip()
-        # strip markdown code fences if present
-        if text.startswith("```"):
-            text = "\n".join(
-                line for line in text.splitlines()
-                if not line.startswith("```")
-            ).strip()
+    req = ur.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with ur.urlopen(req, timeout=20) as resp:
+            body = json.loads(resp.read())
+        text = body["content"][0]["text"].strip()
         return json.loads(text)
-    except Exception as e:
-        return rule_based_eval(watch, result)
-
-
-def rule_based_eval(watch: dict, result: dict) -> dict:
-    ok = result.get("ok", False)
-    if ok:
-        return {"alert": False, "severity": "info", "summary": "ok"}
-    err = result.get("error") or "check failed"
-    return {"alert": True, "severity": "warning", "summary": err}
+    except Exception:
+        return None
 
 
 # ── runner ─────────────────────────────────────────────────────────────────────
 
-def run_all(watches: list, dry_run: bool = False, verbose: bool = False, filter_id: Optional[str] = None):
+def run_all(watches: list, dry_run: bool = False, verbose: bool = False):
     alerts = []
 
     for watch in watches:
         wid   = watch.get("id", "unknown")
-        wtype = watch.get("type", "unknown")
-        name  = watch.get("name", wid)
-
-        if filter_id and wid != filter_id:
-            continue
-
-        if dry_run:
-            print(f"[dry-run] would check: {name} ({wtype})")
-            continue
+        wname = watch.get("name", wid)
+        wtype = watch.get("type", "?")
 
         if verbose:
-            print(f"checking: {name} ({wtype}) ...", end=" ", flush=True)
+            print(f"  checking [{wtype}] {wname} ...", end=" ", flush=True)
+
+        if dry_run:
+            print(f"  [dry-run] would check [{wtype}] {wname}")
+            continue
 
         result  = run_check(watch)
         history = load_history(wid)
-        eval_r  = llm_evaluate(watch, result, history)
 
-        ts = int(time.time())
+        eval_result = llm_evaluate(watch, result, history)
+
+        if eval_result is None:
+            # fallback: use ok field directly
+            alerted  = not result.get("ok", True)
+            severity = "warning" if alerted else "info"
+            summary  = result.get("error") or ("ok" if not alerted else "check failed")
+            eval_result = {"alert": alerted, "severity": severity, "summary": summary}
+
+        alerted = eval_result.get("alert", False)
+
         log_entry = {
-            "ts":       ts,
+            "ts":       int(time.time()),
             "watch_id": wid,
             "type":     wtype,
             "result":   result,
-            "eval":     eval_r,
-            "alerted":  eval_r.get("alert", False),
+            "eval":     eval_result,
+            "alerted":  alerted,
         }
         append_log(log_entry)
 
         if verbose:
-            status = "ALERT" if eval_r.get("alert") else "ok"
-            print(f"{status} -- {eval_r.get('summary', '')}")
+            status_str = "ALERT" if alerted else "ok"
+            print(f"{status_str} -- {eval_result.get('summary', '')}")
 
-        if eval_r.get("alert"):
-            alerts.append({"watch": watch, "result": result, "eval": eval_r})
+        if alerted:
+            alerts.append({"watch": watch, "result": result, "eval": eval_result})
 
     return alerts
 
 
-def print_alerts(alerts: list):
-    if not alerts:
-        print("watchdog: all clear")
-        return
-
-    print(f"\nwatchdog: {len(alerts)} alert(s)\n")
-    for a in alerts:
-        w    = a["watch"]
-        ev   = a["eval"]
-        res  = a["result"]
-        sev  = ev.get("severity", "warning").upper()
-        name = w.get("name", w.get("id", "?"))
-        print(f"  [{sev}] {name}")
-        print(f"    {ev.get('summary', '')}")
-        if res.get("error"):
-            print(f"    error: {res['error']}")
-        print()
-
-
 def main():
     parser = argparse.ArgumentParser(description="watchdog runner")
-    parser.add_argument("--dry-run",  action="store_true", help="show what would run, no checks")
-    parser.add_argument("--id",       metavar="WATCH_ID",  help="only run this watch id")
-    parser.add_argument("--verbose",  action="store_true", help="print each check as it runs")
+    parser.add_argument("--dry-run",  action="store_true", help="show what would be checked, do not run")
+    parser.add_argument("--id",       help="run only the watch with this id")
+    parser.add_argument("--verbose",  action="store_true", help="print status for every watch")
     args = parser.parse_args()
 
     watches = load_watches()
     if not watches:
         sys.exit(0)
 
-    alerts = run_all(watches, dry_run=args.dry_run, verbose=args.verbose, filter_id=args.id)
+    if args.id:
+        watches = [w for w in watches if w.get("id") == args.id]
+        if not watches:
+            print(f"no watch found with id '{args.id}'")
+            sys.exit(1)
 
-    if not args.dry_run:
-        print_alerts(alerts)
-
-    sys.exit(1 if alerts else 0)
-
-
-if __name__ == "__main__":
-    main()
+    if args.verbose or args.dry_run:
+        print

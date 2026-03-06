@@ -12,7 +12,7 @@ the backlog. hourly commits work through this list.
 - [x] `process` watch -- check if a named process is running (by name or pid file)
 - [x] `port` watch -- tcp connect check to host:port
 - [x] `ssl_cert` watch -- days until ssl certificate expires
-- [ ] `json_api` watch -- poll a json api, evaluate a specific field with a condition (e.g. `status != "ok"`)
+- [x] `json_api` watch -- poll a json api, evaluate a specific field with a condition (e.g. `status != "ok"`)
 - [ ] `ping` watch -- icmp ping with packet loss and latency
 
 ### features
